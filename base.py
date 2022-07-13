@@ -113,6 +113,7 @@ class Template(object):
           code.dedent()
         else:
           self._syntax_error("Invalid tag", words[0])
+        print(code)
       else:
         # Literal content.  If it isn't empty, output it.
         if token:
@@ -120,3 +121,74 @@ class Template(object):
     if ops_stack:
       self._syntax_error("Unmatched tag", ops_stack[-1])
     flush_output()
+
+    for var_name in self.all_vars - self.loop_vars:
+            vars_code.add_line("c_%s = context[%r]" % (var_name, var_name))
+    code.add_line("return ''.join(result)")
+    code.dedent()
+
+    self._render_function = code.get_globals()['render_function']
+
+  def _expr_code(self, expr):
+    """Generate a Python expression for `expr`."""
+    if "|" in expr:
+      pipes = expr.split("|")
+      code = self._expr_code(pipes[0])
+      for func in pipes[1:]:
+        self._variable(func, self.all_vars)
+        code = "c_%s(%s)" % (func, code)
+    elif "." in expr:
+      dots = expr.split(".")
+      code = self._expr_code(dots[0])
+      args = ", ".join(repr(d) for d in dots[1:])
+      code = "do_dots(%s, %s)" % (code, args)
+    else:
+      self._variable(expr, self.all_vars)
+      code = "c_%s" % expr
+    return code
+
+  def _syntax_error(self, msg, thing):
+    """Raise syntax error using 'msg' and showing 'thing'"""
+    raise TemplateSyntaxError("%s: %r" % (msg, thing))
+
+  def _variable(self, name, vars_set):
+    """Tracks variables by name and raises syntax error on invalid name"""
+    if not re.match(r"[_a-zA-Z][_a-zA-Z0-9]*$", name):
+      self._syntax_error("Invalid name", name)
+    vars_set.add(name)
+
+  def render(self, context=None):
+    """Renders template with evaluated context"""
+    render_context = dict(self.context)
+    if context:
+      render_context.update(context)
+    return self._render_function(render_context, self._do_dots)
+
+  def _do_dots(self, value, *dots):
+    """Evaluate dotted expressions"""
+    for dot in dots:
+      try:
+        value = getattr(value, dot)
+      except AttributeError:
+        value = value[dot]
+      if callable(value):
+        value = value()
+    return value
+
+
+if __name__ == "__main__":
+  test_template = Template('''
+      <h1>Hello {{name|upper}}!</h1>
+      {% for topic in topics %}
+          <p>You are interested in {{topic}}.</p>
+      {% endfor %}
+      ''',
+      {'upper': str.upper},
+  )
+
+  text = test_template.render({
+    'name': "Ned",
+    'topics': ['Python', 'Geometry', 'Juggling'],
+  })
+
+  print(text)
